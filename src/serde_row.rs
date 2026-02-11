@@ -6,7 +6,7 @@ use crate::{as_ref};
 use crate::table::{Table, ColumnType, Flags};
 use crate::db::{Error};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value<'a> {
     Null,
     Int(i64),

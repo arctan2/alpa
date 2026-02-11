@@ -9,6 +9,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c583acf993cf4245c4acb0a2cc2ab1f9cc097de73411bb6d3647ff6af2b1013d"
 
 [[package]]
+name = "alpa"
+version = "0.1.0"
+dependencies = [
+ "allocator-api2",
+ "buddy_system_allocator",
+ "embedded-sdmmc",
+ "rand",
+ "serde",
+]
+
+[[package]]
 name = "buddy_system_allocator"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -28,17 +39,6 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "db_engine"
-version = "0.1.0"
-dependencies = [
- "allocator-api2",
- "buddy_system_allocator",
- "embedded-sdmmc",
- "rand",
- "serde",
-]
 
 [[package]]
 name = "embedded-hal"

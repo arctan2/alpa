@@ -308,6 +308,89 @@ where
         Ok(())
     }
 
+    pub fn update_row(&mut self, table_page: u32, key: Value<'_>, row: Row<'_, A>, allocator: A) -> Result<(), Error<F::Error>> {
+        let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
+        let table = unsafe { as_ref_mut!(self.table_buf, Table) };
+
+        if table.rows_btree_page == 0 {
+            return Err(Error::NotFound);
+        }
+
+        if table.col_count as usize != row.len() {
+            return Err(Error::ColCountDoesNotMatch);
+        }
+
+        key.to_key(&mut self.buf1);
+        let key = unsafe { as_ref!(self.buf1, Key) };
+        let mut path: Vec<u32, A> = Vec::new_in(allocator.clone());
+        let leaf_page = btree::traverse_to_leaf_with_path(
+            table, &mut self.buf2, key,
+            self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?,
+            &mut path
+        )?;
+
+        self.file_handler.wal_begin_write(&mut self.buf3)?; 
+        
+        {
+            self.file_handler.wal_append_pages_vec(&path, &mut self.buf4)?;
+            self.file_handler.wal_append_page(leaf_page, &mut self.buf4)?;
+            self.file_handler.wal_end_write()?;
+        }
+
+        btree::delete_payload_from_leaf(
+            &mut self.buf1, &mut self.buf2,
+            &mut self.buf3, &mut self.buf4,
+            leaf_page, table,
+            self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?, path,
+            allocator.clone()
+        )?;
+        self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.write_page(table_page, self.table_buf.as_ref())?;
+
+        // -------------------------------- end of delete -------------------------------------------------
+
+        if table.rows_btree_page == 0 {
+            let free_page = unsafe {
+                get_free_page!(self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?, &mut self.buf1)?
+            };
+
+            table.rows_btree_page = free_page;
+            self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.write_page(table_page, self.table_buf.as_ref())?;
+            let btree_leaf = unsafe { as_ref_mut!(self.buf1, BtreeLeaf) }; 
+            btree_leaf.init();
+            self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.write_page(free_page, self.buf1.as_ref())?;
+        }
+
+        let serialized_row = serde_row::serialize(table, &row, allocator.clone())?;
+
+        PayloadCellView::new_to_buf(
+            table, self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?,
+            serialized_row, &mut self.buf1, &mut self.buf2
+        )?;
+
+        let payload_cell = PayloadCellView::new(table, self.buf1.as_ref(), 0);
+        let mut path = Vec::new_in(allocator.clone());
+        let leaf_page = btree::traverse_to_leaf_with_path(
+            table, &mut self.buf2, payload_cell.key(),
+            self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?,
+            &mut path
+        )?;
+
+        btree::insert_payload_to_leaf(
+            &mut self.buf1, &mut self.buf2,
+            &mut self.buf3, &mut self.buf4,
+            leaf_page, table,
+            self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?, path,
+            allocator.clone()
+        )?;
+        self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.write_page(table_page, self.table_buf.as_ref())?;
+
+        if table_page != FixedPages::DbCat.into() {
+            self.file_handler.end_wal()?;
+        }
+
+        Ok(())
+    }
+
     pub fn create_table(&mut self, allocator: A) -> Result<u32, Error<F::Error>> {
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
 
@@ -498,6 +581,41 @@ mod test {
             ).unwrap();
 
             assert_eq!(exec.count().unwrap(), 5);
+        }
+
+        {
+            let key = std::format!("cool_col1_value_{}", 7);
+            let mut new_col2_val: Option<i64> = None;
+            {
+                let query = Query::<_, &str>::new(cool_table, allocator.clone()).key(Value::Chars(key.as_bytes()));
+                let mut exec = QueryExecutor::new(
+                    query, &mut db.table_buf, &mut db.buf1, &mut db.buf2,
+                    &db.file_handler.page_rw.as_ref().unwrap()
+                ).unwrap();
+
+                let mut row = exec.next().unwrap();
+                match row[1] {
+                    Value::Int(v) => new_col2_val = Some(v + 1),
+                    _ => ()
+                }
+            }
+
+            let mut row = Row::new_in(allocator.clone());
+            row.push(Value::Chars(key.as_bytes()));
+            row.push(Value::Int(new_col2_val.unwrap()));
+            db.update_row(cool_table, Value::Chars(key.as_bytes()), row, allocator.clone()).unwrap();
+
+            {
+                let query = Query::<_, &str>::new(cool_table, allocator.clone()).key(Value::Chars(key.as_bytes()));
+                let mut exec = QueryExecutor::new(
+                    query, &mut db.table_buf, &mut db.buf1, &mut db.buf2,
+                    &db.file_handler.page_rw.as_ref().unwrap()
+                ).unwrap();
+
+                let mut row = exec.next().unwrap();
+                assert!(row[0].eq(&Value::Chars(key.as_bytes())));
+                assert!(row[1].eq(&Value::Int(8)));
+            }
         }
     }
 

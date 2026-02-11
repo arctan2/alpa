@@ -18,11 +18,12 @@ Advanced querying capabilites is not implemented due to the limited ram the micr
 
 ✔️ Delete tables (drop)
 
-❌ Update (explicitly not supported, use delete + insert)
+⚠️ Update (does delete + insert in a single wal transaction internally, update of keys not supported)
 
 ## Schema and Data Model
-* Mandatory Primary Key
-* Only one primary key per table
+⚠️ Mandatory Primary Key
+
+⚠️ Only one primary key per table
 
 ✔️ Nullable
 
@@ -77,7 +78,7 @@ Filtering Conditions:
 
 ✔️ IsNull
 
-| Note: These operate on column-value comparisons only. No column-column is supported yet.
+| Note ⚠️: These operate on column-value comparisons only. No column-column is supported yet.
 
 ## Query Structure
 
