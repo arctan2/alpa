@@ -506,10 +506,11 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 #[cfg(test)]
 mod test {
     use crate::embedded_sdmmc_ram_device::{allocators, block_device, esp_alloc, timesource};
-    use crate::embedded_sdmmc_ram_device::fs::{DbDirSdmmc};
+    use crate::embedded_sdmmc_fs::{DbDirSdmmc};
     use crate::{Column, ColumnType, Value, Row, Query, QueryExecutor};
     use embedded_sdmmc::{VolumeManager, BlockDevice};
     use crate::db;
@@ -593,7 +594,7 @@ mod test {
                     &db.file_handler.page_rw.as_ref().unwrap()
                 ).unwrap();
 
-                let mut row = exec.next().unwrap();
+                let row = exec.next().unwrap();
                 match row[1] {
                     Value::Int(v) => new_col2_val = Some(v + 1),
                     _ => ()
@@ -612,7 +613,7 @@ mod test {
                     &db.file_handler.page_rw.as_ref().unwrap()
                 ).unwrap();
 
-                let mut row = exec.next().unwrap();
+                let row = exec.next().unwrap();
                 assert!(row[0].eq(&Value::Chars(key.as_bytes())));
                 assert!(row[1].eq(&Value::Int(8)));
             }

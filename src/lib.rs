@@ -3,6 +3,7 @@
 #[cfg(feature = "std")]
 pub mod embedded_sdmmc_ram_device;
 
+pub mod embedded_sdmmc_fs;
 pub mod db;
 pub mod page_buf;
 pub mod fs;
