@@ -1,4 +1,5 @@
 use crate::fs::PageFile;
+use crate::fs::VolMan;
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -14,34 +15,36 @@ pub static PANICS_REM: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(1));
 
 pub const PAGE_SIZE: usize = 4096;
 
-pub struct PageRW<F>
-where F: PageFile
+pub struct PageRW<V, F>
+where V: VolMan, F: PageFile
 {
+    pub vm: V,
     pub file: F
 }
 
-impl <F> PageRW<F> where F: PageFile {
-    pub fn new(file: F) -> Self {
+impl <V, F> PageRW<V, F> where V: VolMan<F = F>, F: PageFile {
+    pub fn new(vm: V, file: F) -> Self {
         Self {
-            file: file
+            file: file,
+            vm: vm
         }
     }
 
-    pub fn read_page(&self, page_num: u32, buf: &mut [u8; PAGE_SIZE]) -> Result<usize, F::Error> {
+    pub fn read_page(&self, page_num: u32, buf: &mut [u8; PAGE_SIZE]) -> Result<usize, V::Error> {
         let offset: u32 = page_num * buf.len() as u32;
-        self.file.seek_from_start(offset)?;
-        return self.file.read(buf);
+        self.vm.file_seek_from_start(&self.file, offset)?;
+        return self.vm.file_read(&self.file, buf);
     }
 
     #[cfg(not(feature = "hw_failure_test"))]
-    pub fn write_page(&self, page_num: u32, buf: &[u8; PAGE_SIZE]) -> Result<(), F::Error> {
+    pub fn write_page(&self, page_num: u32, buf: &[u8; PAGE_SIZE]) -> Result<(), V::Error> {
         let offset: u32 = page_num * buf.len() as u32;
-        self.file.seek_from_start(offset)?;
-        return self.file.write(buf);
+        self.vm.file_seek_from_start(&self.file, offset)?;
+        return self.vm.file_write(&self.file, buf);
     }
 
     #[cfg(feature = "hw_failure_test")]
-    pub fn write_page(&self, page_num: u32, buf: &[u8; PAGE_SIZE]) -> Result<(), F::Error> {
+    pub fn write_page(&self, page_num: u32, buf: &[u8; PAGE_SIZE]) -> Result<(), V::Error> {
         let mut writes_rem = WRITES_REM.lock().unwrap();
         let mut panics_rem = PANICS_REM.lock().unwrap();
 
@@ -59,15 +62,15 @@ impl <F> PageRW<F> where F: PageFile {
         }
 
         let offset: u32 = page_num * buf.len() as u32;
-        self.file.seek_from_start(offset)?;
-        return self.file.write(buf);
+        self.vm.file_seek_from_start(&self.file, offset)?;
+        return self.vm.file_write(&self.file, buf);
     }
 
     // this accounts for any incomplete transactions
     // so that's the reason it takes cur_db_page_count and it compares it with actual pages count
     // from file length
-    pub fn extend_file_one_page(&self, cur_db_page_count: u32, buf: &mut [u8; PAGE_SIZE]) -> Result<u32, F::Error> {
-        let page = (self.file.length() / (PAGE_SIZE as u32)).min(cur_db_page_count);
+    pub fn extend_file_one_page(&self, cur_db_page_count: u32, buf: &mut [u8; PAGE_SIZE]) -> Result<u32, V::Error> {
+        let page = (self.vm.file_length(&self.file)? / (PAGE_SIZE as u32)).min(cur_db_page_count);
         buf.fill(0);
         self.write_page(page, buf)?;
         Ok(page)

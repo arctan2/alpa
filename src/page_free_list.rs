@@ -1,5 +1,5 @@
 use crate::page_rw::{PageRW, PAGE_SIZE};
-use crate::fs::PageFile;
+use crate::fs::{PageFile, VolMan};
 use crate::db::{Error, DBHeader, FixedPages};
 use crate::page_buf::PageBuffer;
 use allocator_api2::alloc::Allocator;
@@ -20,10 +20,10 @@ pub struct PageFreeList {
 }
 
 impl PageFreeList {
-    pub unsafe fn get_free_page<F: PageFile, A: Allocator + Clone>(
+    pub unsafe fn get_free_page<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
         buf: &mut PageBuffer<A>,
-        page_rw: &PageRW<F>
-    ) -> Result<u32, Error<F::Error>> {
+        page_rw: &PageRW<V, F>
+    ) -> Result<u32, Error<V::Error>> {
         let mut prev_page = 0;
         let mut cur_page = 1;
         let _ = page_rw.read_page(FixedPages::FreeList.into(), buf.as_mut())?;
@@ -66,11 +66,11 @@ impl PageFreeList {
         Ok(page)
     }
 
-    pub unsafe fn add_page_to_list<F: PageFile, A: Allocator + Clone>(
+    pub unsafe fn add_page_to_list<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
         buf: &mut PageBuffer<A>,
         page_num: u32,
-        page_rw: &PageRW<F>
-    ) -> Result<(), Error<F::Error>> {
+        page_rw: &PageRW<V, F>
+    ) -> Result<(), Error<V::Error>> {
         let mut cur_page = 1;
         let _ = page_rw.read_page(FixedPages::FreeList.into(), buf.as_mut())?;
         let mut cur = unsafe { as_ref_mut!(buf, PageFreeList) };

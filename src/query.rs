@@ -5,7 +5,7 @@ use crate::btree;
 use crate::btree::{Cursor, Key};
 use crate::table::{Table, ToName};
 use crate::page_rw::{PageRW};
-use crate::fs::{PageFile};
+use crate::fs::{PageFile, VolMan};
 use crate::page_buf::PageBuffer;
 use crate::overflow::OverflowPage;
 use crate::{as_ref};
@@ -172,7 +172,7 @@ impl <'a, A, N> Query<'a, A, N> where A: Allocator + Clone, N: ToName {
     // }
 }
 
-pub struct QueryExecutor<'a, F: PageFile, A: Allocator + Clone, N: ToName> {
+pub struct QueryExecutor<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, N: ToName> {
     table_buf: &'a mut PageBuffer<A>,
     tmp_buf: &'a mut PageBuffer<A>,
     cursor: Cursor<'a, A>,
@@ -181,17 +181,17 @@ pub struct QueryExecutor<'a, F: PageFile, A: Allocator + Clone, N: ToName> {
     payload: Vec<u8, A>,
     cur_count: usize,
     row: Row<'a, A>,
-    page_rw: &'a PageRW<F>
+    page_rw: &'a PageRW<V, F>
 }
 
-impl <'a, F: PageFile, A: Allocator + Clone, N: ToName> QueryExecutor<'a, F, A, N> {
+impl <'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, N: ToName> QueryExecutor<'a, V, F, A, N> {
     pub fn new(
         query: Query<'a, A, N>,
         table_buf: &'a mut PageBuffer<A>,
         tmp_buf: &'a mut PageBuffer<A>,
         cursor_buf: &'a mut PageBuffer<A>,
-        page_rw: &'a PageRW<F>
-    ) -> Result<Self, Error<F::Error>> {
+        page_rw: &'a PageRW<V, F>
+    ) -> Result<Self, Error<V::Error>> {
         let _ = page_rw.read_page(query.target_table, table_buf.as_mut())?;
         let table = unsafe { as_ref!(table_buf, Table) };
         let cursor = Cursor::new(table, cursor_buf, page_rw)?;
@@ -239,7 +239,7 @@ impl <'a, F: PageFile, A: Allocator + Clone, N: ToName> QueryExecutor<'a, F, A, 
         }
     }
 
-    pub fn count(&mut self) -> Result<usize, Error<F::Error>> {
+    pub fn count(&mut self) -> Result<usize, Error<V::Error>> {
         let mut count = 0;
 
         loop {
@@ -253,7 +253,7 @@ impl <'a, F: PageFile, A: Allocator + Clone, N: ToName> QueryExecutor<'a, F, A, 
         }
     }
 
-    pub fn next(&mut self) -> Result<&mut Row<'a, A>, Error<F::Error>> {
+    pub fn next(&mut self) -> Result<&mut Row<'a, A>, Error<V::Error>> {
         let _ = self.page_rw.read_page(self.query.target_table, self.table_buf.as_mut())?;
         let target_table = unsafe { as_ref!(self.table_buf, Table) };
         let payload = &mut self.payload;

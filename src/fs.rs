@@ -1,15 +1,6 @@
-pub trait PageFile {
-    type Error: core::fmt::Debug;
+pub trait PageFile {}
 
-    fn seek_from_start(&self, offset: u32) -> Result<(), Self::Error>;
-    fn seek_from_end(&self, offset: u32) -> Result<(), Self::Error>;
-    fn read(&self, buf: &mut [u8]) -> Result<usize, Self::Error>;
-    fn write(&self, buf: &[u8]) -> Result<(), Self::Error>;
-    fn offset(&self) -> u32;
-    fn length(&self) -> u32;
-    fn close(self) -> Result<(), Self::Error>;
-    fn flush(&self) -> Result<(), Self::Error>;
-}
+pub trait DbDir {}
 
 pub enum Mode {
     ReadOnly,
@@ -20,10 +11,21 @@ pub enum Mode {
     ReadWriteCreateOrAppend,
 }
 
-pub trait DbDir<'a> {
+pub trait VolMan {
     type Error: core::fmt::Debug;
-    type File<'s>: PageFile<Error = Self::Error> where Self: 's, Self: 'a;
+    type F: PageFile;
+    type D: DbDir;
 
-    fn open_file_in_dir(&'a self, name: &'static str, mode: Mode) -> Result<Self::File<'a>, Self::Error>;
-    fn delete_file_in_dir(&self, name: &'static str) -> Result<(), Self::Error>;
+    fn file_seek_from_start(&self, file: &Self::F, offset: u32) -> Result<(), Self::Error>;
+    fn file_seek_from_end(&self, file: &Self::F, offset: u32) -> Result<(), Self::Error>;
+    fn file_read(&self, file: &Self::F, buf: &mut [u8]) -> Result<usize, Self::Error>;
+    fn file_write(&self, file: &Self::F, buf: &[u8]) -> Result<(), Self::Error>;
+    fn file_offset(&self, file: &Self::F) -> Result<u32, Self::Error>;
+    fn file_length(&self, file: &Self::F) -> Result<u32, Self::Error>;
+    fn file_close(&self, file: Self::F) -> Result<(), Self::Error>;
+    fn file_flush(&self, file: &Self::F) -> Result<(), Self::Error>;
+
+    fn open_file_in_dir(&self, dir: &Self::D, name: &'static str, mode: Mode) -> Result<Self::F, Self::Error>;
+    fn delete_file_in_dir(&self, dir: &Self::D, name: &'static str) -> Result<(), Self::Error>;
 }
+

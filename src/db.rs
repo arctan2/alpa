@@ -9,7 +9,7 @@ use crate::btree;
 use crate::btree::{BtreeLeaf, PayloadCellView, Key};
 use crate::table::{Table, Column, ColumnType, ToName};
 use crate::page_rw::{PageRW};
-use crate::fs::{DbDir, PageFile};
+use crate::fs::{DbDir, PageFile, VolMan};
 use crate::page_buf::{PageBuffer};
 use crate::{as_ref_mut, as_ref, get_free_page, add_page_to_free_list};
 use allocator_api2::vec::Vec;
@@ -19,12 +19,14 @@ use crate::query::{Query, QueryExecutor};
 use crate::file_handler::FileHandler;
 use crate::page_free_list::PageFreeList;
 
-pub struct Database<F, A>
+pub struct Database<V, D, F, A>
 where
+    V: VolMan<F = F, D = D>,
+    D: DbDir,
     F: PageFile,
     A: Allocator + Clone
 {
-    pub file_handler: FileHandler<F>,
+    pub file_handler: FileHandler<V, D, F>,
     pub table_buf: PageBuffer<A>,
     pub buf1: PageBuffer<A>,
     pub buf2: PageBuffer<A>,
@@ -56,10 +58,10 @@ pub struct DBHeader {
 }
 
 impl DBHeader {
-    pub fn inc_page_count<F: PageFile, A: Allocator + Clone>(
+    pub fn inc_page_count<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
         buf: &mut PageBuffer<A>,
-        page_rw: &PageRW<F>
-    ) -> Result<(), Error<F::Error>> {
+        page_rw: &PageRW<V, F>
+    ) -> Result<(), Error<V::Error>> {
         let _ = page_rw.read_page(FixedPages::Header.into(), buf.as_mut())?;
         let header = unsafe { as_ref_mut!(buf, DBHeader) };
         header.page_count += 1;
@@ -67,10 +69,10 @@ impl DBHeader {
         Ok(())
     }
 
-    pub fn get_page_count<F: PageFile, A: Allocator + Clone>(
+    pub fn get_page_count<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
         buf: &mut PageBuffer<A>,
-        page_rw: &PageRW<F>
-    ) -> Result<u32, Error<F::Error>> {
+        page_rw: &PageRW<V, F>
+    ) -> Result<u32, Error<V::Error>> {
         let _ = page_rw.read_page(FixedPages::Header.into(), buf.as_mut())?;
         let header = unsafe { as_ref!(buf, DBHeader) };
         Ok(header.page_count)
@@ -116,16 +118,20 @@ impl<E: core::fmt::Debug> From<E> for Error<E> {
     }
 }
 
-impl <F, A> Database<F, A>
+impl <V, D, F, A> Database<V, D, F, A>
 where
+    V: VolMan<F = F, D = D>,
+    D: DbDir,
     F: PageFile,
     A: Allocator + Clone
 {
-    pub fn new_init<'a, D: DbDir<'a, Error = F::Error, File<'a> = F> + 'a>(
-        dir: &'a D,
+    pub fn new_init(
+        vm: V,
+        dir: D,
         allocator: A
-    ) -> Result<Self, Error<F::Error>> {
-        let file_handler = FileHandler::new()?;
+    ) -> Result<Self, Error<V::Error>> {
+        let mut tmp_buf = PageBuffer::new(allocator.clone());
+        let file_handler = FileHandler::new_init(vm, dir, &mut tmp_buf)?;
         let mut db = Self {
             file_handler: file_handler,
             table_buf: PageBuffer::new(allocator.clone()),
@@ -135,8 +141,6 @@ where
             buf4: PageBuffer::new(allocator.clone()),
         };
 
-        db.file_handler.open_with_wal_check(dir, &mut db.buf1)?;
-
         let header = db.get_or_create_header()?;
         if header.page_count == 0 {
             db.create_new_db(header)?;
@@ -145,14 +149,7 @@ where
         Ok(db)
     }
 
-    pub fn close<'a, D: DbDir<'a, Error = F::Error, File<'a> = F> + 'a>(
-        &mut self,
-        dir: &'a D
-    ) -> Result<(), Error<F::Error>> {
-        self.file_handler.close(dir)
-    }
-
-    fn get_or_create_header(&mut self) -> Result<DBHeader, Error<F::Error>> {
+    fn get_or_create_header(&mut self) -> Result<DBHeader, Error<V::Error>> {
         let count = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?
                     .read_page(FixedPages::Header.into(), self.buf1.as_mut())?;
         if count == 0 {
@@ -168,7 +165,7 @@ where
         };
     }
 
-    fn create_new_db(&mut self, mut header: DBHeader) -> Result<(), Error<F::Error>> {
+    fn create_new_db(&mut self, mut header: DBHeader) -> Result<(), Error<V::Error>> {
         header.page_count = 2;
         unsafe {
             self.buf1.write(0, &header);
@@ -190,7 +187,7 @@ where
         Ok(())
     }
 
-    pub fn insert_to_table(&mut self, table_page: u32, row: Row<'_, A>, allocator: A) -> Result<(), Error<F::Error>> {
+    pub fn insert_to_table(&mut self, table_page: u32, row: Row<'_, A>, allocator: A) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
         let table = unsafe { as_ref_mut!(self.table_buf, Table) }; 
 
@@ -265,7 +262,7 @@ where
         table_page: u32,
         key: Value<'_>,
         allocator: A
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
 
@@ -308,7 +305,7 @@ where
         Ok(())
     }
 
-    pub fn update_row(&mut self, table_page: u32, key: Value<'_>, row: Row<'_, A>, allocator: A) -> Result<(), Error<F::Error>> {
+    pub fn update_row(&mut self, table_page: u32, key: Value<'_>, row: Row<'_, A>, allocator: A) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
 
@@ -391,7 +388,7 @@ where
         Ok(())
     }
 
-    pub fn create_table(&mut self, allocator: A) -> Result<u32, Error<F::Error>> {
+    pub fn create_table(&mut self, allocator: A) -> Result<u32, Error<V::Error>> {
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
 
         self.file_handler.wal_begin_write(&mut self.buf1)?;
@@ -410,7 +407,7 @@ where
         Ok(free_page)
     }
 
-    pub fn delete_table(&mut self, table_page: u32, allocator: A) -> Result<(), Error<F::Error>> {
+    pub fn delete_table(&mut self, table_page: u32, allocator: A) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.buf2.as_mut())?;
         let table = unsafe { as_ref_mut!(self.buf2, Table) }; 
 
@@ -459,7 +456,7 @@ where
         table.name = name.to_name();
     }
 
-    pub fn add_column(&mut self, col: Column) -> Result<(), Error<F::Error>> {
+    pub fn add_column(&mut self, col: Column) -> Result<(), Error<V::Error>> {
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
         table.add_column(col)
     }
@@ -473,7 +470,7 @@ where
         }
     }
 
-    pub fn get_table<N: ToName>(&mut self, name: N, allocator: A) -> Result<u32, Error<F::Error>> {
+    pub fn get_table<N: ToName>(&mut self, name: N, allocator: A) -> Result<u32, Error<V::Error>> {
         let db_cat_page = FixedPages::DbCat.into();
         let n = name.to_name();
         let query: Query<'_, _, N> = Query::new(db_cat_page, allocator.clone()).key(Value::Chars(&n));
@@ -506,11 +503,23 @@ where
     }
 }
 
+impl <V, D, F, A> core::ops::Drop for Database<V, D, F, A>
+where
+    V: VolMan<F = F, D = D>,
+    D: DbDir,
+    F: PageFile,
+    A: Allocator + Clone
+{
+    fn drop(&mut self) {
+        let _ = self.file_handler.close();
+    }
+}
+
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod test {
     use crate::embedded_sdmmc_ram_device::{allocators, block_device, esp_alloc, timesource};
-    use crate::embedded_sdmmc_fs::{DbDirSdmmc};
+    use crate::embedded_sdmmc_fs::{DbDirSdmmc, VM};
     use crate::{Column, ColumnType, Value, Row, Query, QueryExecutor};
     use embedded_sdmmc::{VolumeManager, BlockDevice};
     use crate::db;
@@ -524,12 +533,13 @@ mod test {
     pub fn table_basic_operations() {
         allocators::init_simulated_hardware();
         let sdcard = block_device::FsBlockDevice::new("test_file.db").unwrap();
-        let vol_man = VolumeManager::new(sdcard, timesource::DummyTimesource);
-        let volume = vol_man.open_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
-        let root_dir = volume.open_root_dir().unwrap();
-        let _ = root_dir.make_dir_in_dir("STUFF").unwrap();
-        let stuff_dir = DbDirSdmmc::new(root_dir.open_dir("STUFF").unwrap());
-        let mut db = db::Database::new_init(&stuff_dir, esp_alloc::ExternalMemory).unwrap();
+        let raw_vm = VolumeManager::new(sdcard, timesource::DummyTimesource);
+        let vol = raw_vm.open_raw_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
+        let vm = VM::new(&raw_vm);
+        let root_dir = raw_vm.open_root_dir(vol).unwrap();
+        let _ = raw_vm.make_dir_in_dir(root_dir, "STUFF").unwrap();
+        let stuff_dir = DbDirSdmmc::new(raw_vm.open_dir(root_dir, "STUFF").unwrap());
+        let mut db = db::Database::new_init(vm, stuff_dir, esp_alloc::ExternalMemory).unwrap();
 
         let allocator = esp_alloc::ExternalMemory;
 
@@ -625,12 +635,13 @@ mod test {
     pub fn delete_table_test() {
         allocators::init_simulated_hardware();
         let sdcard = block_device::FsBlockDevice::new("test_file.db").unwrap();
-        let vol_man = VolumeManager::new(sdcard, timesource::DummyTimesource);
-        let volume = vol_man.open_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
-        let root_dir = volume.open_root_dir().unwrap();
-        let _ = root_dir.make_dir_in_dir("STUFF").unwrap();
-        let stuff_dir = DbDirSdmmc::new(root_dir.open_dir("STUFF").unwrap());
-        let mut db = db::Database::new_init(&stuff_dir, esp_alloc::ExternalMemory).unwrap();
+        let raw_vm = VolumeManager::new(sdcard, timesource::DummyTimesource);
+        let vol = raw_vm.open_raw_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
+        let vm = VM::new(&raw_vm);
+        let root_dir = raw_vm.open_root_dir(vol).unwrap();
+        let _ = raw_vm.make_dir_in_dir(root_dir, "STUFF").unwrap();
+        let stuff_dir = DbDirSdmmc::new(raw_vm.open_dir(root_dir, "STUFF").unwrap());
+        let mut db = db::Database::new_init(vm, stuff_dir, esp_alloc::ExternalMemory).unwrap();
 
         let allocator = esp_alloc::ExternalMemory;
 
@@ -686,12 +697,13 @@ mod test {
 
     fn failure_phase(sdcard: impl BlockDevice + core::panic::UnwindSafe) -> Result<bool, ()> {
         let ret = std::panic::catch_unwind(|| {
-            let vol_man = VolumeManager::new(sdcard, timesource::DummyTimesource);
-            let volume = vol_man.open_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
-            let root_dir = volume.open_root_dir().unwrap();
-            let _ = root_dir.make_dir_in_dir("STUFF").unwrap();
-            let stuff_dir = DbDirSdmmc::new(root_dir.open_dir("STUFF").unwrap());
-            let mut db = db::Database::new_init(&stuff_dir, esp_alloc::ExternalMemory).unwrap();
+            let raw_vm = VolumeManager::new(sdcard, timesource::DummyTimesource);
+            let vol = raw_vm.open_raw_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
+            let vm = VM::new(&raw_vm);
+            let root_dir = raw_vm.open_root_dir(vol).unwrap();
+            let _ = raw_vm.make_dir_in_dir(root_dir, "STUFF").unwrap();
+            let stuff_dir = DbDirSdmmc::new(raw_vm.open_dir(root_dir, "STUFF").unwrap());
+            let mut db = db::Database::new_init(vm, stuff_dir, esp_alloc::ExternalMemory).unwrap();
 
             let allocator = esp_alloc::ExternalMemory;
 
@@ -722,12 +734,13 @@ mod test {
 
     fn recovery_phase<B: BlockDevice + core::panic::UnwindSafe>(sdcard: B) -> Result<bool, db::Error<B::Error>> {
         let ret = std::panic::catch_unwind(|| {
-            let vol_man = embedded_sdmmc::VolumeManager::new(sdcard, timesource::DummyTimesource);
-            let volume = vol_man.open_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
-            let root_dir = volume.open_root_dir().unwrap();
-            let _ = root_dir.make_dir_in_dir("STUFF");
-            let stuff_dir = DbDirSdmmc::new(root_dir.open_dir("STUFF").unwrap());
-            let mut db = db::Database::new_init(&stuff_dir, esp_alloc::ExternalMemory).unwrap();
+            let raw_vm = VolumeManager::new(sdcard, timesource::DummyTimesource);
+            let vol = raw_vm.open_raw_volume(embedded_sdmmc::VolumeIdx(0)).unwrap();
+            let vm = VM::new(&raw_vm);
+            let root_dir = raw_vm.open_root_dir(vol).unwrap();
+            let _ = raw_vm.make_dir_in_dir(root_dir, "STUFF");
+            let stuff_dir = DbDirSdmmc::new(raw_vm.open_dir(root_dir, "STUFF").unwrap());
+            let mut db = db::Database::new_init(vm, stuff_dir, esp_alloc::ExternalMemory).unwrap();
 
             let allocator = esp_alloc::ExternalMemory;
             let cool_table = db.get_table("cool_table", allocator.clone()).unwrap();

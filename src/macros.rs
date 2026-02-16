@@ -46,7 +46,7 @@ macro_rules! as_ref {
 #[macro_export]
 macro_rules! get_free_page {
     ($page_rw:expr, $buf:expr) => {
-        PageFreeList::get_free_page::<F, A>(
+        PageFreeList::get_free_page::<V, F, A>(
             $buf,
             $page_rw
         )
@@ -56,7 +56,7 @@ macro_rules! get_free_page {
 #[macro_export]
 macro_rules! add_page_to_free_list {
     ($page_rw:expr, $page_num:expr, $buf:expr) => {
-        PageFreeList::add_page_to_list::<F, A>(
+        PageFreeList::add_page_to_list::<V, F, A>(
             $buf, 
             $page_num,
             $page_rw

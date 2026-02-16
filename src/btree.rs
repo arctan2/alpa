@@ -8,7 +8,7 @@ use std::{println, print};
 
 use core::mem::size_of;
 use crate::page_rw::{PAGE_SIZE};
-use crate::fs::{PageFile};
+use crate::fs::{PageFile, VolMan};
 use core::cmp::Ordering;
 use crate::page_buf::{PageBuffer, PageBufferWriter, PageBufferReader};
 use allocator_api2::alloc::Allocator;
@@ -245,13 +245,13 @@ impl <'a> PayloadCellView<'a> {
         }
     }
 
-    pub fn new_to_buf<F: PageFile, A: Allocator + Clone>(
+    pub fn new_to_buf<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
         table: &Table,
-        page_rw: &PageRW<F>,
+        page_rw: &PageRW<V, F>,
         row: SerializedRow<A>,
         buf: &mut PageBuffer<A>,
         overflow_buf: &mut PageBuffer<A>,
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         let mut buf_writer = PageBufferWriter::new(buf);
         let payload_len: u32 = row.payload.len() as u32;
         let mut inline_len: u32 = payload_len;
@@ -312,12 +312,12 @@ impl <'a> InternalCellView<'a> {
         }
     }
 
-    pub fn new_to_buf<F: PageFile, A: Allocator + Clone>(
-        page_rw: &PageRW<F>,
+    pub fn new_to_buf<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+        page_rw: &PageRW<V, F>,
         buf: &mut PageBuffer<A>,
         child: u32,
         key: &Key,
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         let mut buf_writer = PageBufferWriter::new(buf);
         buf_writer.write(&child);
         buf_writer.write_slice(key.as_bytes());
@@ -619,12 +619,12 @@ impl BtreeInternal {
     }
 }
 
-pub fn set_child_next_leaf<'a, F: PageFile, A: Allocator + Clone>(
+pub fn set_child_next_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     tmp_buf: &'a mut PageBuffer<A>,
     child: u32,
     next_leaf: u32,
-    page_rw: &PageRW<F>,
-) -> Result<(), Error<F::Error>> {
+    page_rw: &PageRW<V, F>,
+) -> Result<(), Error<V::Error>> {
     let _ = page_rw.read_page(child, tmp_buf.as_mut())?;
     let leaf = unsafe { as_ref_mut!(tmp_buf, BtreeLeaf) };
     leaf.next_leaf = next_leaf;
@@ -632,18 +632,18 @@ pub fn set_child_next_leaf<'a, F: PageFile, A: Allocator + Clone>(
     Ok(())
 }
 
-pub fn promote_key_iter<'a, F: PageFile, A: Allocator + Clone>(
+pub fn promote_key_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     promoted_key_buf: &mut PageBuffer<A>,
     buf1: &'a mut PageBuffer<A>,
     buf2: &mut PageBuffer<A>,
     buf3: &mut PageBuffer<A>,
     table: &mut Table,
     mut path: Vec<u32, A>,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     mut left: u32,
     mut right: u32,
     allocator: A
-) -> Result<(), Error<F::Error>> {
+) -> Result<(), Error<V::Error>> {
     let mut is_first_iter = true;
     loop {
         let promoted_key = unsafe { as_ref!(promoted_key_buf, Key) };
@@ -744,18 +744,18 @@ pub fn promote_key_iter<'a, F: PageFile, A: Allocator + Clone>(
     return Ok(());
 }
 
-pub fn split_leaf_iter<'a, F: PageFile, A: Allocator + Clone>(
+pub fn split_leaf_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     payload_cell_buf: &mut PageBuffer<A>,
     leaf_buf: &mut PageBuffer<A>,
     tmp_buf1: &mut PageBuffer<A>,
     tmp_buf2: &mut PageBuffer<A>,
     leaf_page: u32,
     table: &mut Table,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     mut path: Vec<u32, A>,
     cells: BtreeCells<'a, A>,
     allocator: A
-) -> Result<(), Error<F::Error>> {
+) -> Result<(), Error<V::Error>> {
     // you have be careful here because everything here is literally the spiderman pointing each other meme
     // * cells references leaf_buf
     // * atleast 1 cell reference payload_cell_buf
@@ -796,17 +796,17 @@ pub fn split_leaf_iter<'a, F: PageFile, A: Allocator + Clone>(
     );
 }
 
-pub fn insert_payload_to_leaf<'a, F: PageFile, A: Allocator + Clone>(
+pub fn insert_payload_to_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     payload_cell_buf: &mut PageBuffer<A>,
     leaf_buf: &mut PageBuffer<A>,
     tmp_buf1: &mut PageBuffer<A>,
     tmp_buf2: &mut PageBuffer<A>,
     leaf_page: u32,
     table: &mut Table,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     mut path: Vec<u32, A>,
     allocator: A
-) -> Result<(), Error<F::Error>> {
+) -> Result<(), Error<V::Error>> {
     let view = PayloadCellView::new_unsafe(table, unsafe { payload_cell_buf.as_ptr(0) }, PAGE_SIZE, 0);
     let _ = page_rw.read_page(leaf_page, leaf_buf.as_mut())?;
     let leaf = unsafe { as_ref!(leaf_buf, BtreeLeaf) };
@@ -838,15 +838,15 @@ pub fn insert_payload_to_leaf<'a, F: PageFile, A: Allocator + Clone>(
     Ok(())
 }
 
-pub fn delete_shift_iter<'a, F: PageFile, A: Allocator + Clone>(
+pub fn delete_shift_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     tmp_buf1: &mut PageBuffer<A>,
     tmp_buf2: &mut PageBuffer<A>,
     leaf_page: u32,
     table: &mut Table,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     mut path: Vec<u32, A>,
     allocator: A
-) -> Result<(), Error<F::Error>> {
+) -> Result<(), Error<V::Error>> {
     let mut removed_page = leaf_page;
 
     while path.len() > 0 {
@@ -885,17 +885,17 @@ pub fn delete_shift_iter<'a, F: PageFile, A: Allocator + Clone>(
     Ok(())
 }
 
-pub fn delete_payload_from_leaf<'a, F: PageFile, A: Allocator + Clone>(
+pub fn delete_payload_from_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     key_buf: &mut PageBuffer<A>,
     leaf_buf: &mut PageBuffer<A>,
     tmp_buf1: &mut PageBuffer<A>,
     tmp_buf2: &mut PageBuffer<A>,
     leaf_page: u32,
     table: &mut Table,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     mut path: Vec<u32, A>,
     allocator: A
-) -> Result<(), Error<F::Error>> {
+) -> Result<(), Error<V::Error>> {
     let _ = page_rw.read_page(leaf_page, leaf_buf.as_mut())?;
     let leaf = unsafe { as_ref!(leaf_buf, BtreeLeaf) };
     let key = unsafe { as_ref!(key_buf, Key) };
@@ -937,12 +937,12 @@ pub fn delete_payload_from_leaf<'a, F: PageFile, A: Allocator + Clone>(
     Ok(())
 }
 
-pub fn get_all_table_pages<'a, F: PageFile, A: Allocator + Clone>(
+pub fn get_all_table_pages<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     allocator: A
-) -> Result<Vec<u32, A>, Error<F::Error>> {
+) -> Result<Vec<u32, A>, Error<V::Error>> {
     let mut pages: Vec<u32, A> = Vec::new_in(allocator.clone());
 
     let mut cur_page = table.rows_btree_page;
@@ -978,13 +978,13 @@ pub fn get_all_table_pages<'a, F: PageFile, A: Allocator + Clone>(
     Ok(pages)
 }
 
-pub fn traverse_to_leaf_with_path<'a, F: PageFile, A: Allocator + Clone>(
+pub fn traverse_to_leaf_with_path<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
     key: &Key,
-    page_rw: &PageRW<F>,
+    page_rw: &PageRW<V, F>,
     path: &mut Vec<u32, A>
-) -> Result<u32, Error<F::Error>> {
+) -> Result<u32, Error<V::Error>> {
     let mut cur_page = table.rows_btree_page;
     if cur_page == 0 {
         return Err(Error::TableEmpty);
@@ -1004,12 +1004,12 @@ pub fn traverse_to_leaf_with_path<'a, F: PageFile, A: Allocator + Clone>(
     return Ok(cur_page);
 }
 
-pub fn traverse_to_leaf<'a, F: PageFile, A: Allocator + Clone>(
+pub fn traverse_to_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
     key: &Key,
-    page_rw: &PageRW<F>,
-) -> Result<u32, Error<F::Error>> {
+    page_rw: &PageRW<V, F>,
+) -> Result<u32, Error<V::Error>> {
     let mut cur_page = table.rows_btree_page;
     if cur_page == 0 {
         return Err(Error::TableEmpty);
@@ -1028,12 +1028,12 @@ pub fn traverse_to_leaf<'a, F: PageFile, A: Allocator + Clone>(
     return Ok(cur_page);
 }
 
-pub fn find_by_key<'a, F: PageFile, A: Allocator + Clone>(
+pub fn find_by_key<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
     key: &Key,
-    page_rw: &PageRW<F>,
-) -> Result<PayloadCellView<'a>, Error<F::Error>> {
+    page_rw: &PageRW<V, F>,
+) -> Result<PayloadCellView<'a>, Error<V::Error>> {
     let _ = traverse_to_leaf(table, tmp_buf, key, page_rw)?;
     let leaf = unsafe { as_ref_mut!(tmp_buf, BtreeLeaf) };
 
@@ -1043,11 +1043,11 @@ pub fn find_by_key<'a, F: PageFile, A: Allocator + Clone>(
     };
 }
 
-pub fn traverse_to_left_most<'a, F: PageFile, A: Allocator + Clone>(
+pub fn traverse_to_left_most<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
-    page_rw: &PageRW<F>,
-) -> Result<u32, Error<F::Error>> {
+    page_rw: &PageRW<V, F>,
+) -> Result<u32, Error<V::Error>> {
     let mut cur_page = table.rows_btree_page;
     if cur_page == 0 {
         return Err(Error::TableEmpty);
@@ -1072,11 +1072,11 @@ pub struct Cursor<'a, A: Allocator + Clone> {
 }
 
 impl <'a, A: Allocator + Clone> Cursor<'a, A> {
-    pub fn new<F: PageFile>(
+    pub fn new<V: VolMan<F = F>, F: PageFile>(
         table: &Table,
         buf: &'a mut PageBuffer<A>,
-        page_rw: &PageRW<F>
-    ) -> Result<Self, Error<F::Error>> {
+        page_rw: &PageRW<V, F>
+    ) -> Result<Self, Error<V::Error>> {
         let left_most_page = traverse_to_left_most(table, buf, page_rw)?;
 
         Ok(Self {
@@ -1086,11 +1086,11 @@ impl <'a, A: Allocator + Clone> Cursor<'a, A> {
         })
     }
 
-    pub fn next<F: PageFile>(
+    pub fn next<V: VolMan<F = F>, F: PageFile>(
         &mut self,
         table: &Table,
-        page_rw: &PageRW<F>
-    ) -> Result<PayloadCellView<'_>, Error<F::Error>> {
+        page_rw: &PageRW<V, F>
+    ) -> Result<PayloadCellView<'_>, Error<V::Error>> {
         let mut leaf = unsafe { as_ref!(self.buf, BtreeLeaf) };
         if self.cur_idx >= leaf.key_count as usize {
             if leaf.next_leaf == 0 {

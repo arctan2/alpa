@@ -1,5 +1,5 @@
 use crate::{as_ref};
-use crate::fs::{DbDir, Mode, PageFile};
+use crate::fs::{DbDir, Mode, PageFile, VolMan};
 use crate::page_buf::{PageBuffer};
 use crate::page_rw::{PageRW, PAGE_SIZE};
 use crate::db::{Error, FixedPages};
@@ -22,10 +22,11 @@ pub struct WalHeader {
     page_count: u32,
 }
 
-pub struct FileHandler<F: PageFile> {
+pub struct FileHandler<V: VolMan, D: DbDir, F: PageFile> {
     cur_header: Option<WalHeader>,
     wal_file: Option<F>,
-    pub page_rw: Option<PageRW<F>>
+    db_dir: D,
+    pub page_rw: Option<PageRW<V, F>>
 }
 
 impl WalHeader {
@@ -38,54 +39,52 @@ impl WalHeader {
     }
 }
 
-impl <F> FileHandler<F>
+impl <V, D, F> FileHandler<V, D, F>
 where
+    V: VolMan<F = F, D = D>,
+    D: DbDir,
     F: PageFile,
 {
-    pub fn new() -> Result<Self, Error<F::Error>> {
-        Ok(Self {
+    pub fn new_init<A: Allocator + Clone>(
+        vm: V,
+        db_dir: D,
+        buf: &mut PageBuffer<A>
+    ) -> Result<Self, Error<V::Error>> {
+        let mut fm = Self {
             wal_file: None,
             cur_header: None,
+            db_dir: db_dir,
             page_rw: None
-        })
-    }
+        };
 
-    pub fn open_with_wal_check<'a, A: Allocator + Clone, D: DbDir<'a, Error = F::Error, File<'a> = F>>(
-        &mut self,
-        dir: &'a D,
-        buf: &mut PageBuffer<A>
-    ) -> Result<(), Error<F::Error>> {
-        let db_file = dir.open_file_in_dir(DB_FILE_NAME, Mode::ReadWriteCreateOrAppend)?;
-        let wal_file = dir.open_file_in_dir(WAL_FILE_NAME, Mode::ReadWriteCreateOrAppend)?;
-        self.page_rw = Some(PageRW::new(db_file));
-        self.wal_file = Some(wal_file);
-        match self.wal_check_restore(buf) {
+        let db_file = vm.open_file_in_dir(&fm.db_dir, DB_FILE_NAME, Mode::ReadWriteCreateOrAppend)?;
+        let wal_file = vm.open_file_in_dir(&fm.db_dir, WAL_FILE_NAME, Mode::ReadWriteCreateOrAppend)?;
+        fm.page_rw = Some(PageRW::new(vm, db_file));
+        fm.wal_file = Some(wal_file);
+        match fm.wal_check_restore(buf) {
             Err(Error::InvalidWalFile) => (),
             Err(other) => return Err(other),
             Ok(_) => ()
         };
-        Ok(())
+
+        Ok(fm)
     }
 
-    pub fn close<'a, D: DbDir<'a, Error = F::Error, File<'a> = F>>(&mut self, dir: &'a D) -> Result<(), Error<F::Error>> {
-        if let Some(f) = self.wal_file.take() {
-            f.close()?;
-        }
-        dir.delete_file_in_dir(WAL_FILE_NAME)?;
+    pub fn close(&mut self) -> Result<(), Error<V::Error>> {
         if let Some(page_rw) = self.page_rw.take() {
-            page_rw.file.close()?;
+            if let Some(f) = self.wal_file.take() {
+                page_rw.vm.file_close(f)?;
+            }
+            page_rw.vm.delete_file_in_dir(&self.db_dir, WAL_FILE_NAME)?;
+            page_rw.vm.file_close(page_rw.file)?;
         }
-        dir.delete_file_in_dir(DB_FILE_NAME)?;
-        self.wal_file = None;
-        self.page_rw = None;
-        self.cur_header = None;
         Ok(())
     }
 
     fn wal_check_restore<A: Allocator + Clone>(
         &mut self,
         buf: &mut PageBuffer<A>
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         {
             let wal_header = self.wal_read_header(buf)?;
             let is_magic = wal_header.magic == WAL_MAGIC;
@@ -116,49 +115,54 @@ where
         Ok(())
     }
 
-    fn wal_read_u32(&self) -> Result<u32, Error<F::Error>> {
+    fn wal_read_u32(&self) -> Result<u32, Error<V::Error>> {
         let mut buf = [0u8; 4];
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
         let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
-        wal_file.read(&mut buf)?;
+        page_rw.vm.file_read(wal_file, &mut buf)?;
         Ok(u32::from_le_bytes(buf))
     }
 
     fn wal_read_buf<A: Allocator + Clone>(
         &self,
         buf: &mut PageBuffer<A>
-    ) -> Result<usize, Error<F::Error>> {
+    ) -> Result<usize, Error<V::Error>> {
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
         let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
-        Ok(wal_file.read(buf.as_mut())?)
+        Ok(page_rw.vm.file_read(wal_file, buf.as_mut())?)
     }
 
     pub fn wal_read_header<A: Allocator + Clone>(
         &mut self,
         buf: &mut PageBuffer<A>,
-    ) -> Result<&WalHeader, Error<F::Error>> {
+    ) -> Result<&WalHeader, Error<V::Error>> {
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
         let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
-        wal_file.seek_from_start(0)?;
-        let _ = wal_file.read(&mut buf.as_mut()[0..core::mem::size_of::<WalHeader>()])?;
+        page_rw.vm.file_seek_from_start(wal_file, 0)?;
+        let _ = page_rw.vm.file_read(wal_file, &mut buf.as_mut()[0..core::mem::size_of::<WalHeader>()])?;
         Ok(unsafe { as_ref!(buf, WalHeader) })
     }
 
-    pub fn wal_verify_trailer(&mut self) -> Result<bool, Error<F::Error>> {
+    pub fn wal_verify_trailer(&mut self) -> Result<bool, Error<V::Error>> {
         let mut trailer_buf: [u8; WAL_TRAILER.len()] = [0; WAL_TRAILER.len()];
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
         let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
-        match wal_file.seek_from_end(WAL_TRAILER.len() as u32) {
+        match page_rw.vm.file_seek_from_end(wal_file, WAL_TRAILER.len() as u32) {
             Ok(_) => (),
             Err(_) => return Ok(false)
         };
-        wal_file.read(&mut trailer_buf)?;
+        page_rw.vm.file_read(wal_file, &mut trailer_buf)?;
         Ok(trailer_buf == WAL_TRAILER)
     }
 
-    fn wal_write_header_to_file(&mut self) -> Result<(), Error<F::Error>> {
+    fn wal_write_header_to_file(&mut self) -> Result<(), Error<V::Error>> {
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
         let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
         let header = self.cur_header.as_mut().unwrap();
-        wal_file.seek_from_start(0)?;
-        wal_file.write(&header.magic)?;
-        wal_file.write(&header.page_size.to_le_bytes())?;
-        wal_file.write(&header.page_count.to_le_bytes())?;
+        page_rw.vm.file_seek_from_start(wal_file, 0)?;
+        page_rw.vm.file_write(wal_file, &header.magic)?;
+        page_rw.vm.file_write(wal_file, &header.page_size.to_le_bytes())?;
+        page_rw.vm.file_write(wal_file, &header.page_count.to_le_bytes())?;
 
         Ok(())
     }
@@ -168,12 +172,13 @@ where
         &mut self,
         page: u32,
         buf: &mut PageBuffer<A>
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
         let header = self.cur_header.as_mut().unwrap();
-        let _ = self.page_rw.as_ref().ok_or(Error::InitError)?.read_page(page, buf.as_mut())?;
-        wal_file.write(&page.to_le_bytes())?;
-        wal_file.write(buf.as_ref())?;
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
+        let _ = page_rw.read_page(page, buf.as_mut())?;
+        page_rw.vm.file_write(wal_file, &page.to_le_bytes())?;
+        page_rw.vm.file_write(wal_file, buf.as_ref())?;
         header.page_count += 1;
         Ok(())
     }
@@ -181,7 +186,7 @@ where
     pub fn wal_begin_write<A: Allocator + Clone>(
         &mut self,
         buf: &mut PageBuffer<A>
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         self.cur_header = Some(WalHeader::default());
         self.wal_write_header_to_file()?;
         self.wal_read_write_page_to_file(FixedPages::Header as u32, buf)?;
@@ -195,7 +200,7 @@ where
         &mut self,
         pages: &Vec<u32, A>,
         buf: &mut PageBuffer<A>
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         for page in pages.iter() {
             self.wal_read_write_page_to_file(*page, buf)?;
         }
@@ -206,26 +211,29 @@ where
         &mut self,
         page: u32,
         buf: &mut PageBuffer<A>
-    ) -> Result<(), Error<F::Error>> {
+    ) -> Result<(), Error<V::Error>> {
         self.wal_read_write_page_to_file(page, buf)?;
         Ok(())
     }
 
-    pub fn wal_write_trailer_to_file(&self) -> Result<(), Error<F::Error>> {
+    pub fn wal_write_trailer_to_file(&self) -> Result<(), Error<V::Error>> {
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
         let f = self.wal_file.as_ref().unwrap();
-        f.seek_from_end(0)?;
-        f.write(&WAL_TRAILER)?;
+        page_rw.vm.file_seek_from_end(f, 0)?;
+        page_rw.vm.file_write(f, &WAL_TRAILER)?;
         Ok(())
     }
 
-    pub fn wal_end_write(&mut self) -> Result<(), Error<F::Error>> {
+    pub fn wal_end_write(&mut self) -> Result<(), Error<V::Error>> {
         self.wal_write_header_to_file()?;
         self.wal_write_trailer_to_file()?;
-        self.wal_file.as_ref().unwrap().flush()?;
+        let page_rw = self.page_rw.as_ref().ok_or(Error::InitError)?;
+        let wal_file = self.wal_file.as_ref().ok_or(Error::InitError)?;
+        page_rw.vm.file_flush(wal_file)?;
         Ok(())
     }
 
-    pub fn end_wal(&mut self) -> Result<(), Error<F::Error>> {
+    pub fn end_wal(&mut self) -> Result<(), Error<V::Error>> {
         self.cur_header = Some(WalHeader::default());
         self.wal_write_header_to_file()?;
         Ok(())

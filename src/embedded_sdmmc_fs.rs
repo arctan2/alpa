@@ -1,110 +1,118 @@
-use crate::fs::{Mode, DbDir, PageFile};
-use embedded_sdmmc::{BlockDevice, TimeSource, File, Directory, Mode as SdMode};
+use crate::fs::{Mode, DbDir, PageFile, VolMan};
+use embedded_sdmmc::{BlockDevice, TimeSource, Mode as SdMode, RawDirectory, RawFile, VolumeManager};
 
 #[derive(Debug)]
-pub struct DbDirSdmmc<
-    'a, D, T,
-    const MAX_DIRS: usize,
-    const MAX_FILES: usize,
-    const MAX_VOLUMES: usize,
->
-where
-    D: BlockDevice,
-    T: TimeSource,
-{
-    pub dir: Directory<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>
+pub struct FileSdmmc {
+    pub raw: RawFile
 }
 
 #[derive(Debug)]
-pub struct FileSdmmc<
+pub struct DbDirSdmmc {
+    pub raw: RawDirectory
+}
+
+impl FileSdmmc {
+    pub fn new(f: RawFile) -> Self {
+        Self {
+            raw: f
+        }
+    }
+}
+
+impl DbDirSdmmc {
+    pub fn new(d: RawDirectory) -> Self {
+        Self {
+            raw: d
+        }
+    }
+}
+
+impl DbDir for DbDirSdmmc {}
+impl PageFile for FileSdmmc {}
+
+
+pub struct VM<
     'a, D, T,
-    const MAX_DIRS: usize,
-    const MAX_FILES: usize,
-    const MAX_VOLUMES: usize,
+    const MD: usize,
+    const MF: usize,
+    const MV: usize,
 >
 where
     D: BlockDevice,
-    T: TimeSource,
+    T: TimeSource
 {
-    pub file: File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>
+    vm: &'a VolumeManager<D, T, MD, MF, MV>
 }
 
 impl <
     'a, D, T,
-    const MAX_DIRS: usize,
-    const MAX_FILES: usize,
-    const MAX_VOLUMES: usize,
-> DbDirSdmmc<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>
+    const MD: usize,
+    const MF: usize,
+    const MV: usize,
+> VM<'a, D, T, MD, MF, MV>
 where
     D: BlockDevice,
     T: TimeSource,
 {
-    pub fn new(d: Directory<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>) -> Self {
-        Self {
-            dir: d
-        }
+    pub fn new(vm: &'a VolumeManager<D, T, MD, MF, MV>) -> Self {
+        Self { vm }
     }
 }
 
 impl <
     'a, D, T,
-    const MAX_DIRS: usize,
-    const MAX_FILES: usize,
-    const MAX_VOLUMES: usize,
-> FileSdmmc<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>
-where
-    D: BlockDevice,
-    T: TimeSource,
-{
-    pub fn new(f: File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>) -> Self {
-        Self {
-            file: f
-        }
-    }
-}
-
-impl <
-    'a, D, T,
-    const MAX_DIRS: usize,
-    const MAX_FILES: usize,
-    const MAX_VOLUMES: usize,
-> PageFile for FileSdmmc<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>
+    const MD: usize,
+    const MF: usize,
+    const MV: usize,
+> VolMan for VM<'a, D, T, MD, MF, MV>
 where
     D: BlockDevice,
     T: TimeSource,
 {
     type Error = embedded_sdmmc::Error<D::Error>;
+    type F = FileSdmmc;
+    type D = DbDirSdmmc;
 
-    fn seek_from_start(&self, offset: u32) -> Result<(), Self::Error> {
-        self.file.seek_from_start(offset)
+    fn file_seek_from_start(&self, file: &Self::F, offset: u32) -> Result<(), Self::Error> {
+        self.vm.file_seek_from_start(file.raw, offset)
     }
 
-    fn seek_from_end(&self, offset: u32) -> Result<(), Self::Error> {
-        self.file.seek_from_end(offset)
+    fn file_seek_from_end(&self, file: &Self::F, offset: u32) -> Result<(), Self::Error> {
+        self.vm.file_seek_from_end(file.raw, offset)
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.file.read(buf)
+    fn file_read(&self, file: &Self::F, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.vm.read(file.raw, buf)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.file.write(buf)
+    fn file_write(&self, file: &Self::F, buf: &[u8]) -> Result<(), Self::Error> {
+        self.vm.write(file.raw, buf)
     }
 
-    fn offset(&self) -> u32 {
-        self.file.offset()
+    fn file_offset(&self, file: &Self::F) -> Result<u32, Self::Error> {
+        self.vm.file_offset(file.raw)
     }
 
-    fn length(&self) -> u32 {
-        self.file.length()
+    fn file_length(&self, file: &Self::F) -> Result<u32, Self::Error> {
+        self.vm.file_length(file.raw)
     }
 
-    fn close(self) -> Result<(), Self::Error> {
-        self.file.close()
+    fn file_close(&self, file: Self::F) -> Result<(), Self::Error> {
+        self.vm.close_file(file.raw)
     }
 
-    fn flush(&self) -> Result<(), Self::Error> {
-        self.file.flush()
+    fn file_flush(&self, file: &Self::F) -> Result<(), Self::Error> {
+        self.vm.flush_file(file.raw)
+    }
+
+    fn open_file_in_dir(&self, dir: &Self::D, name: &'static str, mode: Mode) -> Result<Self::F, Self::Error> {
+        Ok(FileSdmmc::new(
+            self.vm.open_file_in_dir(dir.raw, name, map_mode(mode))?
+        ))
+    }
+
+    fn delete_file_in_dir(&self, dir: &Self::D, name: &'static str) -> Result<(), Self::Error> {
+        self.vm.delete_file_in_dir(dir.raw, name)
     }
 }
 
@@ -119,26 +127,3 @@ fn map_mode(m: Mode) -> SdMode {
     }
 }
 
-impl <
-    'a, D, T,
-    const MAX_DIRS: usize,
-    const MAX_FILES: usize,
-    const MAX_VOLUMES: usize,
-> DbDir<'a> for DbDirSdmmc<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>
-where
-    D: BlockDevice,
-    T: TimeSource,
-{
-    type Error = embedded_sdmmc::Error<D::Error>;
-    type File<'b> = FileSdmmc<'b, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES> where Self: 'b, Self: 'a;
-
-    fn open_file_in_dir(&'a self, name: &'static str, mode: Mode) -> Result<Self::File<'a>, Self::Error> {
-        Ok(FileSdmmc::new(
-            self.dir.open_file_in_dir(name, map_mode(mode))?
-        ))
-    }
-
-    fn delete_file_in_dir(&self, name: &'static str) -> Result<(), Self::Error> {
-        self.dir.delete_file_in_dir(name)
-    }
-}
