@@ -25,6 +25,7 @@ pub trait VolMan {
     fn file_close(&self, file: Self::F) -> Result<(), Self::Error>;
     fn file_flush(&self, file: &Self::F) -> Result<(), Self::Error>;
 
+    fn close_dir(&self, dir: &Self::D) -> Result<(), Self::Error>;
     fn open_file_in_dir(&self, dir: &Self::D, name: &'static str, mode: Mode) -> Result<Self::F, Self::Error>;
     fn delete_file_in_dir(&self, dir: &Self::D, name: &'static str) -> Result<(), Self::Error>;
 }

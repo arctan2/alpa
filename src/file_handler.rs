@@ -76,6 +76,7 @@ where
                 page_rw.vm.file_close(f)?;
             }
             page_rw.vm.delete_file_in_dir(&self.db_dir, WAL_FILE_NAME)?;
+            page_rw.vm.close_dir(&self.db_dir)?;
             page_rw.vm.file_close(page_rw.file)?;
         }
         Ok(())

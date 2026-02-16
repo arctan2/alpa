@@ -105,6 +105,10 @@ where
         self.vm.flush_file(file.raw)
     }
 
+    fn close_dir(&self, dir: &Self::D) -> Result<(), Self::Error> {
+        self.vm.close_dir(dir.raw)
+    }
+
     fn open_file_in_dir(&self, dir: &Self::D, name: &'static str, mode: Mode) -> Result<Self::F, Self::Error> {
         Ok(FileSdmmc::new(
             self.vm.open_file_in_dir(dir.raw, name, map_mode(mode))?
