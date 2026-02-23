@@ -245,10 +245,10 @@ impl <'a> PayloadCellView<'a> {
         }
     }
 
-    pub fn new_to_buf<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+    pub fn new_to_buf<V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
         table: &Table,
         page_rw: &PageRW<V, F>,
-        row: SerializedRow<A>,
+        row: SerializedRow<A2>,
         buf: &mut PageBuffer<A>,
         overflow_buf: &mut PageBuffer<A>,
     ) -> Result<(), Error<V::Error>> {
@@ -632,17 +632,17 @@ pub fn set_child_next_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clo
     Ok(())
 }
 
-pub fn promote_key_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn promote_key_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     promoted_key_buf: &mut PageBuffer<A>,
     buf1: &'a mut PageBuffer<A>,
     buf2: &mut PageBuffer<A>,
     buf3: &mut PageBuffer<A>,
     table: &mut Table,
-    mut path: Vec<u32, A>,
+    mut path: Vec<u32, A2>,
     page_rw: &PageRW<V, F>,
     mut left: u32,
     mut right: u32,
-    allocator: A
+    allocator: A2
 ) -> Result<(), Error<V::Error>> {
     let mut is_first_iter = true;
     loop {
@@ -744,7 +744,7 @@ pub fn promote_key_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>
     return Ok(());
 }
 
-pub fn split_leaf_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn split_leaf_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     payload_cell_buf: &mut PageBuffer<A>,
     leaf_buf: &mut PageBuffer<A>,
     tmp_buf1: &mut PageBuffer<A>,
@@ -752,9 +752,9 @@ pub fn split_leaf_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     leaf_page: u32,
     table: &mut Table,
     page_rw: &PageRW<V, F>,
-    mut path: Vec<u32, A>,
-    cells: BtreeCells<'a, A>,
-    allocator: A
+    mut path: Vec<u32, A2>,
+    cells: BtreeCells<'a, A2>,
+    allocator: A2
 ) -> Result<(), Error<V::Error>> {
     // you have be careful here because everything here is literally the spiderman pointing each other meme
     // * cells references leaf_buf
@@ -796,7 +796,7 @@ pub fn split_leaf_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
     );
 }
 
-pub fn insert_payload_to_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn insert_payload_to_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     payload_cell_buf: &mut PageBuffer<A>,
     leaf_buf: &mut PageBuffer<A>,
     tmp_buf1: &mut PageBuffer<A>,
@@ -804,8 +804,8 @@ pub fn insert_payload_to_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + 
     leaf_page: u32,
     table: &mut Table,
     page_rw: &PageRW<V, F>,
-    mut path: Vec<u32, A>,
-    allocator: A
+    mut path: Vec<u32, A2>,
+    allocator: A2
 ) -> Result<(), Error<V::Error>> {
     let view = PayloadCellView::new_unsafe(table, unsafe { payload_cell_buf.as_ptr(0) }, PAGE_SIZE, 0);
     let _ = page_rw.read_page(leaf_page, leaf_buf.as_mut())?;
@@ -838,14 +838,14 @@ pub fn insert_payload_to_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + 
     Ok(())
 }
 
-pub fn delete_shift_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn delete_shift_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     tmp_buf1: &mut PageBuffer<A>,
     tmp_buf2: &mut PageBuffer<A>,
     leaf_page: u32,
     table: &mut Table,
     page_rw: &PageRW<V, F>,
-    mut path: Vec<u32, A>,
-    allocator: A
+    mut path: Vec<u32, A2>,
+    allocator: A2
 ) -> Result<(), Error<V::Error>> {
     let mut removed_page = leaf_page;
 
@@ -885,7 +885,7 @@ pub fn delete_shift_iter<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone
     Ok(())
 }
 
-pub fn delete_payload_from_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn delete_payload_from_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     key_buf: &mut PageBuffer<A>,
     leaf_buf: &mut PageBuffer<A>,
     tmp_buf1: &mut PageBuffer<A>,
@@ -893,8 +893,8 @@ pub fn delete_payload_from_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator 
     leaf_page: u32,
     table: &mut Table,
     page_rw: &PageRW<V, F>,
-    mut path: Vec<u32, A>,
-    allocator: A
+    mut path: Vec<u32, A2>,
+    allocator: A2
 ) -> Result<(), Error<V::Error>> {
     let _ = page_rw.read_page(leaf_page, leaf_buf.as_mut())?;
     let leaf = unsafe { as_ref!(leaf_buf, BtreeLeaf) };
@@ -937,20 +937,20 @@ pub fn delete_payload_from_leaf<'a, V: VolMan<F = F>, F: PageFile, A: Allocator 
     Ok(())
 }
 
-pub fn get_all_table_pages<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn get_all_table_pages<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
     page_rw: &PageRW<V, F>,
-    allocator: A
-) -> Result<Vec<u32, A>, Error<V::Error>> {
-    let mut pages: Vec<u32, A> = Vec::new_in(allocator.clone());
+    allocator: A2
+) -> Result<Vec<u32, A2>, Error<V::Error>> {
+    let mut pages: Vec<u32, A2> = Vec::new_in(allocator.clone());
 
     let mut cur_page = table.rows_btree_page;
     if cur_page == 0 {
         return Ok(pages);
     }
 
-    let mut stack: Vec<u32, A> = Vec::new_in(allocator);
+    let mut stack: Vec<u32, A2> = Vec::new_in(allocator);
     stack.push(cur_page);
 
     while stack.len() > 0 {
@@ -978,12 +978,12 @@ pub fn get_all_table_pages<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clo
     Ok(pages)
 }
 
-pub fn traverse_to_leaf_with_path<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone>(
+pub fn traverse_to_leaf_with_path<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone>(
     table: &Table,
     tmp_buf: &mut PageBuffer<A>,
     key: &Key,
     page_rw: &PageRW<V, F>,
-    path: &mut Vec<u32, A>
+    path: &mut Vec<u32, A2>
 ) -> Result<u32, Error<V::Error>> {
     let mut cur_page = table.rows_btree_page;
     if cur_page == 0 {

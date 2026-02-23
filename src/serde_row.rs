@@ -159,19 +159,19 @@ pub struct SerializedRow<A: Allocator + Clone> {
     pub payload: Vec<u8, A>,
 }
 
-pub fn serialize<'a, E: core::fmt::Debug, A: Allocator + Clone>(
+pub fn serialize<'a, E: core::fmt::Debug, A: Allocator + Clone, A2: Allocator + Clone>(
     table: &Table,
     row: &Row<A>,
     // tmp_buf1: &mut PageBuffer<A>,
     // tmp_buf2: &mut PageBuffer<A>,
     // tmp_buf3: &mut PageBuffer<A>,
     // page_rw: &PageRW<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-    allocator: A
-) -> Result<SerializedRow<A>, Error<E>> {
-    let mut payload: Vec<u8, A> = Vec::new_in(allocator.clone());
+    allocator: A2
+) -> Result<SerializedRow<A2>, Error<E>> {
+    let mut payload: Vec<u8, A2> = Vec::new_in(allocator.clone());
     let mut null_flags: u64 = 0;
     let mut i = 0;
-    let mut key: Vec<u8, A> = Vec::new_in(allocator.clone());
+    let mut key: Vec<u8, A2> = Vec::new_in(allocator.clone());
 
     while i < row.len() {
         let col = &table.columns[i];

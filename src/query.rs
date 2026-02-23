@@ -172,21 +172,21 @@ impl <'a, A, N> Query<'a, A, N> where A: Allocator + Clone, N: ToName {
     // }
 }
 
-pub struct QueryExecutor<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, N: ToName> {
+pub struct QueryExecutor<'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone, N: ToName> {
     table_buf: &'a mut PageBuffer<A>,
     tmp_buf: &'a mut PageBuffer<A>,
     cursor: Cursor<'a, A>,
-    query: Query<'a, A, N>,
+    query: Query<'a, A2, N>,
     is_ran: bool,
-    payload: Vec<u8, A>,
+    payload: Vec<u8, A2>,
     cur_count: usize,
-    row: Row<'a, A>,
+    row: Row<'a, A2>,
     page_rw: &'a PageRW<V, F>
 }
 
-impl <'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, N: ToName> QueryExecutor<'a, V, F, A, N> {
+impl <'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, A2: Allocator + Clone, N: ToName> QueryExecutor<'a, V, F, A, A2, N> {
     pub fn new(
-        query: Query<'a, A, N>,
+        query: Query<'a, A2, N>,
         table_buf: &'a mut PageBuffer<A>,
         tmp_buf: &'a mut PageBuffer<A>,
         cursor_buf: &'a mut PageBuffer<A>,
@@ -253,7 +253,7 @@ impl <'a, V: VolMan<F = F>, F: PageFile, A: Allocator + Clone, N: ToName> QueryE
         }
     }
 
-    pub fn next(&mut self) -> Result<&mut Row<'a, A>, Error<V::Error>> {
+    pub fn next(&mut self) -> Result<&mut Row<'a, A2>, Error<V::Error>> {
         let _ = self.page_rw.read_page(self.query.target_table, self.table_buf.as_mut())?;
         let target_table = unsafe { as_ref!(self.table_buf, Table) };
         let payload = &mut self.payload;

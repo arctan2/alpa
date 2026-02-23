@@ -134,11 +134,38 @@ where
         let file_handler = FileHandler::new_init(vm, dir, &mut tmp_buf)?;
         let mut db = Self {
             file_handler: file_handler,
-            table_buf: PageBuffer::new(allocator.clone()),
+            table_buf: tmp_buf,
             buf1: PageBuffer::new(allocator.clone()),
             buf2: PageBuffer::new(allocator.clone()),
             buf3: PageBuffer::new(allocator.clone()),
             buf4: PageBuffer::new(allocator.clone()),
+        };
+
+        let header = db.get_or_create_header()?;
+        if header.page_count == 0 {
+            db.create_new_db(header)?;
+        }
+
+        Ok(db)
+    }
+
+    pub fn new_init_with_buffers(
+        vm: V,
+        dir: D,
+        mut table_buf: PageBuffer<A>,
+        buf1: PageBuffer<A>,
+        buf2: PageBuffer<A>,
+        buf3: PageBuffer<A>,
+        buf4: PageBuffer<A>,
+    ) -> Result<Self, Error<V::Error>> {
+        let file_handler = FileHandler::new_init(vm, dir, &mut table_buf)?;
+        let mut db = Self {
+            file_handler: file_handler,
+            table_buf: table_buf,
+            buf1,
+            buf2,
+            buf3,
+            buf4,
         };
 
         let header = db.get_or_create_header()?;
@@ -187,7 +214,7 @@ where
         Ok(())
     }
 
-    pub fn insert_to_table(&mut self, table_page: u32, row: Row<'_, A>, allocator: A) -> Result<(), Error<V::Error>> {
+    pub fn insert_to_table<A2: Allocator + Clone>(&mut self, table_page: u32, row: Row<'_, A2>, allocator: A2) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
         let table = unsafe { as_ref_mut!(self.table_buf, Table) }; 
 
@@ -257,11 +284,11 @@ where
     // this is the most hacky way to support delete_table with wal. I basically pass the entire
     // btree pages of table during delete_table. I know I can do a wal checkpoint system. But I
     // don't think I need that right now. No one will use this shitty db anyway.
-    pub fn delete_from_table(
+    pub fn delete_from_table<A2: Allocator + Clone>(
         &mut self,
         table_page: u32,
         key: Value<'_>,
-        allocator: A
+        allocator: A2
     ) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
@@ -272,7 +299,7 @@ where
 
         key.to_key(&mut self.buf1);
         let key = unsafe { as_ref!(self.buf1, Key) };
-        let mut path: Vec<u32, A> = Vec::new_in(allocator.clone());
+        let mut path: Vec<u32, A2> = Vec::new_in(allocator.clone());
         let leaf_page = btree::traverse_to_leaf_with_path(
             table, &mut self.buf2, key,
             self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?,
@@ -305,7 +332,9 @@ where
         Ok(())
     }
 
-    pub fn update_row(&mut self, table_page: u32, key: Value<'_>, row: Row<'_, A>, allocator: A) -> Result<(), Error<V::Error>> {
+    pub fn update_row<A2: Allocator + Clone>(
+        &mut self, table_page: u32, key: Value<'_>, row: Row<'_, A>, allocator: A2
+    ) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.table_buf.as_mut())?;
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
 
@@ -319,7 +348,7 @@ where
 
         key.to_key(&mut self.buf1);
         let key = unsafe { as_ref!(self.buf1, Key) };
-        let mut path: Vec<u32, A> = Vec::new_in(allocator.clone());
+        let mut path: Vec<u32, A2> = Vec::new_in(allocator.clone());
         let leaf_page = btree::traverse_to_leaf_with_path(
             table, &mut self.buf2, key,
             self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?,
@@ -388,7 +417,7 @@ where
         Ok(())
     }
 
-    pub fn create_table(&mut self, allocator: A) -> Result<u32, Error<V::Error>> {
+    pub fn create_table<A2: Allocator + Clone>(&mut self, allocator: A2) -> Result<u32, Error<V::Error>> {
         let table = unsafe { as_ref_mut!(self.table_buf, Table) };
 
         self.file_handler.wal_begin_write(&mut self.buf1)?;
@@ -407,7 +436,7 @@ where
         Ok(free_page)
     }
 
-    pub fn delete_table(&mut self, table_page: u32, allocator: A) -> Result<(), Error<V::Error>> {
+    pub fn delete_table<A2: Allocator + Clone>(&mut self, table_page: u32, allocator: A2) -> Result<(), Error<V::Error>> {
         let _ = self.file_handler.page_rw.as_ref().ok_or(Error::InitError)?.read_page(table_page, self.buf2.as_mut())?;
         let table = unsafe { as_ref_mut!(self.buf2, Table) }; 
 
@@ -470,7 +499,7 @@ where
         }
     }
 
-    pub fn get_table<N: ToName>(&mut self, name: N, allocator: A) -> Result<u32, Error<V::Error>> {
+    pub fn get_table<N: ToName, A2: Allocator + Clone>(&mut self, name: N, allocator: A2) -> Result<u32, Error<V::Error>> {
         let db_cat_page = FixedPages::DbCat.into();
         let n = name.to_name();
         let query: Query<'_, _, N> = Query::new(db_cat_page, allocator.clone()).key(Value::Chars(&n));
@@ -489,7 +518,7 @@ where
     }
 
     #[cfg(feature = "std")]
-    pub fn print_all_table<N: ToName>(&mut self, allocator: A) {
+    pub fn print_all_table<N: ToName, A2: Allocator + Clone>(&mut self, allocator: A2) {
         let db_cat_page = FixedPages::DbCat.into();
         let query: Query<'_, _, N> = Query::new(db_cat_page, allocator.clone());
 

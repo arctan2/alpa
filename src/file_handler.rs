@@ -73,6 +73,7 @@ where
     pub fn close(&mut self) -> Result<(), Error<V::Error>> {
         if let Some(page_rw) = self.page_rw.take() {
             if let Some(f) = self.wal_file.take() {
+                page_rw.vm.file_flush(&f)?;
                 page_rw.vm.file_close(f)?;
             }
             page_rw.vm.delete_file_in_dir(&self.db_dir, WAL_FILE_NAME)?;
@@ -197,9 +198,9 @@ where
         Ok(())
     }
 
-    pub fn wal_append_pages_vec<A: Allocator + Clone>(
+    pub fn wal_append_pages_vec<A: Allocator + Clone, A2: Allocator + Clone>(
         &mut self,
-        pages: &Vec<u32, A>,
+        pages: &Vec<u32, A2>,
         buf: &mut PageBuffer<A>
     ) -> Result<(), Error<V::Error>> {
         for page in pages.iter() {

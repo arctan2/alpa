@@ -22,3 +22,4 @@ mod file_handler;
 pub use table::{Column, ColumnType, Name, ToName};
 pub use query::{Query, QueryExecutor};
 pub use serde_row::{Row, Value, Operations};
+pub use file_handler::{WAL_FILE_NAME, DB_FILE_NAME, WAL_MAGIC, WAL_TRAILER};
