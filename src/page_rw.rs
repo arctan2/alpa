@@ -13,7 +13,15 @@ pub static WRITES_REM: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(27))
 #[cfg(feature = "std")]
 pub static PANICS_REM: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(1));
 
+#[cfg(feature = "page_size_1024")]
+pub const PAGE_SIZE: usize = 1024;
+
+#[cfg(feature = "page_size_2048")]
+pub const PAGE_SIZE: usize = 2048;
+
+#[cfg(feature = "page_size_4096")]
 pub const PAGE_SIZE: usize = 4096;
+
 
 pub struct PageRW<V, F>
 where V: VolMan, F: PageFile
